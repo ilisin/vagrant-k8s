@@ -16,12 +16,89 @@ Vagrant.configure("2") do |config|
   # boxes at https://vagrantcloud.com/search.
   config.vm.box = "centos/7"
 
-  (1..3).each do |i|
+  (1..1).each do |i|
     config.vm.define "node-#{i}" do |node|
       node.vm.network "private_network", ip: "172.16.0.10#{i}"
       node.vm.network "public_network", bridge: "en1: Wi-Fi (AirPort)"
       node.vm.provision "shell",
-        inline: "echo hello from node #{i}"
+        inline: <<-SCRIPT
+        echo starting from node $1
+        echo '开始安装shadowsocks'
+        yum -y install epel-release
+        yum -y install python-pip
+        pip install --upgrade pip
+        pip install shadowsocks
+        mkdir /etc/shadowsocks
+
+        cat >/etc/shadowsocks/shadowsocks.json <<EOF
+{
+  "server":"35.201.231.175",
+  "server_port":443,
+  "local_address": "127.0.0.1",
+  "local_port":1080,
+  "password":"pwd284659736",
+  "timeout":300,
+  "method":"aes-256-cfb",
+  "workers": 1
+}
+EOF
+        echo '开始配置shadows服务'
+        cat >/etc/systemd/system/shadowsocks.service <<EOF
+[Unit]
+Description=Shadowsocks
+[Service]
+TimeoutStartSec=0
+ExecStart=/usr/bin/sslocal -c /etc/shadowsocks/shadowsocks.json
+[Install]
+WantedBy=multi-user.target
+EOF
+        echo '开始启动shadows客户端'
+        systemctl enable shadowsocks.service
+        systemctl start shadowsocks.service
+        systemctl status shadowsocks.service
+
+        echo '安装privoxy'
+        yum install wget gcc autoconf -y
+        mkdir /opt/privoxy && cd /opt/privoxy
+        wget https://github.com/ilisin/rc/raw/master/privoxy-3.0.26-stable-src.tar.gz
+        tar -zxvf privoxy-3.0.26-stable-src.tar.gz
+        cd privoxy-3.0.26-stable
+        useradd privoxy
+        autoheader && autoconf
+        ./configure
+        make && make install
+
+        echo "forward-socks5t    /    127.0.0.1:1080 ." >> /usr/local/etc/privoxy/config
+
+        privoxy --user privoxy /usr/local/etc/privoxy/config
+
+        echo "export http_proxy=http://127.0.0.1:8118" >> /etc/profile
+        echo "export https_proxy=http://127.0.0.1:8118" >> /etc/profile
+
+        source /etc/profile
+        
+        echo '安装docker'
+        yum install -y docker
+        systemctl enable docker && systemctl start docker
+
+        echo '安装kubelete kubeadm kubectl'
+        cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+EOF
+        setenforce 0
+        yum install -y kubelet kubeadm kubectl
+        systemctl enable kubelet && systemctl start kubelet
+
+        echo '这里需要检查docker 及 kubelet cgroup driver是否一致'
+
+        SCRIPT
+        args = [i]
     end
   end
 
