@@ -1,0 +1,192 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# All Vagrant configuration is done below. The "2" in Vagrant.configure
+# configures the configuration version (we support older styles for
+# backwards compatibility). Please don't change it unless you know what
+# you're doing.
+Vagrant.configure("2") do |config|
+  # The most common configuration options are documented and commented below.
+  # For a complete reference, please see the online documentation at
+  # https://docs.vagrantup.com.
+
+  # Every Vagrant development environment requires a box. You can search for
+  # boxes at https://vagrantcloud.com/search.
+
+  $num_instances = 1
+
+  (1..$num_instances).each do |i|
+
+    config.vm.define "k8s-node#{i}" do |node|
+
+      node.vm.box = "centos/7"
+      node.vm.hostname = "k8s-node#{i}"
+      ip = "172.17.8.#{i+100}"
+      node.vm.network "private_network", ip: ip
+      node.vm.network "public_network", bridge: "en0: Wi-Fi (AirPort)", auto_config: true
+      #node.vm.synced_folder "/Users/DuffQiu/share", "/home/vagrant/share"
+
+      node.vm.provider "virtualbox" do |vb|
+  #   # Display the VirtualBox GUI when booting the machine
+  #   vb.gui = true
+  #
+  #   # Customize the amount of memory on the VM:
+        vb.memory = "3072"
+        vb.cpus = 1
+        vb.name = "k8s-node#{i}"
+      end
+
+      node.vm.provision "shell" do |s|
+        s.inline = <<-SHELL
+          # change time zone
+          cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+          timedatectl set-timezone Asia/Shanghai
+
+          echo '安装shadowsocks'
+          yum install python-setuptools -y
+          easy_install pip
+          pip install shadowsocks
+
+          cat >> /etc/shadowsocks.json <<EOF
+{
+    "server":"35.201.231.175",
+    "server_port":443,
+    "local_address":"127.0.0.1",
+    "local_port":1080,
+    "password":"pwd284659736",
+    "timeout":300,
+    "method":"aes-256-cfb",
+    "workers":1
+}
+EOF
+
+          echo '启动shadowsocks客户端'
+          cat >> /etc/systemd/system/shadowsocks.service <<EOF
+[Unit]
+Description=Shadowsocks Client Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/sslocal -c /etc/shadowsocks.json
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+          systemctl enable shadowsocks.service
+          systemctl start shadowsocks.service
+
+          cd /opt/
+          yum install wget automake gcc -y
+          useradd privoxy
+
+          wget https://github.com/ilisin/rc/raw/master/privoxy-3.0.26-stable-src.tar.gz
+          tar xvf privoxy-3.0.26-stable-src.tar.gz
+          cd privoxy-3.0.26-stable/
+          cd privoxy-3.0.8-stable
+
+          autoheader && autoconf
+          ./configure
+          make&& make install
+
+          echo '启动privoxy'
+          echo 'forward-socks5t   /    127.0.0.1:1080   .' >> /usr/local/etc/privoxy/config
+          privoxy --user privoxy /usr/local/etc/privoxy/config
+
+          echo 'PROXY_HOST=127.0.0.1' >> /etc/profile
+          echo 'export all_proxy=http://$PROXY_HOST:8118' >> /etc/profile
+          echo 'export ftp_proxy=http://$PROXY_HOST:8118' >> /etc/profile
+          echo 'export http_proxy=http://$PROXY_HOST:8118' >> /etc/profile
+          echo 'export https_proxy=http://$PROXY_HOST:8118' >> /etc/profile
+          echo 'export no_proxy=localhost,172.16.0.0/16,192.168.0.0/16.,127.0.0.1,10.10.0.0/16' >> /etc/profile
+
+          source /etc/profile
+
+          echo '安装docker'
+          yum install -y docker
+          systemctl enable docker && systemctl start docker
+
+          echo '安装 kubeadm kubelet kubectl'
+
+          cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+EOF
+          setenforce 0
+          yum install -y kubelet kubeadm kubectl
+          systemctl enable kubelet && systemctl start kubelet
+
+          cat <<EOF >  /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+EOF
+          sysctl --system
+        SHELL
+        s.args = []
+      end
+    end
+  end
+
+  
+
+  # Disable automatic box update checking. If you disable this, then
+  # boxes will only be checked for updates when the user runs
+  # `vagrant box outdated`. This is not recommended.
+  # config.vm.box_check_update = false
+
+  # Create a forwarded port mapping which allows access to a specific port
+  # within the machine from a port on the host machine. In the example below,
+  # accessing "localhost:8080" will access port 80 on the guest machine.
+  # NOTE: This will enable public access to the opened port
+  # config.vm.network "forwarded_port", guest: 80, host: 8080
+
+  # Create a forwarded port mapping which allows access to a specific port
+  # within the machine from a port on the host machine and only allow access
+  # via 127.0.0.1 to disable public access
+  # config.vm.network "forwarded_port", guest: 80, host: 8080, host_ip: "127.0.0.1"
+
+  # Create a private network, which allows host-only access to the machine
+  # using a specific IP.
+  # config.vm.network "private_network", ip: "192.168.33.10"
+
+  # Create a public network, which generally matched to bridged network.
+  # Bridged networks make the machine appear as another physical device on
+  # your network.
+  # config.vm.network "public_network"
+
+  # Share an additional folder to the guest VM. The first argument is
+  # the path on the host to the actual folder. The second argument is
+  # the path on the guest to mount the folder. And the optional third
+  # argument is a set of non-required options.
+  # config.vm.synced_folder "../data", "/vagrant_data"
+
+  # Provider-specific configuration so you can fine-tune various
+  # backing providers for Vagrant. These expose provider-specific options.
+  # Example for VirtualBox:
+  #
+  # config.vm.provider "virtualbox" do |vb|
+  #   # Display the VirtualBox GUI when booting the machine
+  #   vb.gui = true
+  #
+  #   # Customize the amount of memory on the VM:
+  #   vb.memory = "1024"
+  # end
+  #
+  # View the documentation for the provider you are using for more
+  # information on available options.
+
+  # Enable provisioning with a shell script. Additional provisioners such as
+  # Puppet, Chef, Ansible, Salt, and Docker are also available. Please see the
+  # documentation for more information about their specific syntax and use.
+  # config.vm.provision "shell", inline: <<-SHELL
+  #   apt-get update
+  #   apt-get install -y apache2
+  # SHELL
+end
