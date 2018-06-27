@@ -21,13 +21,23 @@ Vagrant.configure("2") do |config|
       node.vm.network "private_network", ip: "172.16.0.10#{i}"
       node.vm.network "public_network", bridge: "en1: Wi-Fi (AirPort)"
       node.vm.provision "shell",
-        inline: <<-SCRIPT
-        echo starting from node $1
-        echo '开始安装shadowsocks'
-        yum -y install epel-release
-        yum -y install python-pip
-        pip install --upgrade pip
+        inline: <<-SHELL
+        echo $1
+
+        if [ $1 eq "1" ]; then
+          echo '第一个'
+        fi
+
+        exit
+
+        cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+        timedatectl set-timezone Asia/Shanghai
+
+        echo '安装shadowsocks'
+        yum install python-setuptools -y
+        easy_install pip
         pip install shadowsocks
+          
         mkdir /etc/shadowsocks
 
         cat >/etc/shadowsocks/shadowsocks.json <<EOF
@@ -97,8 +107,21 @@ EOF
 
         echo '这里需要检查docker 及 kubelet cgroup driver是否一致'
 
-        SCRIPT
-        args = [i]
+        cat <<EOF >  /etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+EOF
+        sysctl --system
+
+        echo 'Creating HA clusters with kubeadm'
+        curl -o /usr/local/bin/cfssl https://pkg.cfssl.org/R1.2/cfssl_linux-amd64
+        curl -o /usr/local/bin/cfssljson https://pkg.cfssl.org/R1.2/cfssljson_linux-amd64
+        chmod +x /usr/local/bin/cfssl*
+
+
+
+      SHELL
+      args = ["#{i}"]
     end
   end
 
